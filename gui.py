@@ -1,4 +1,6 @@
 import sys
+import json
+import urllib.parse
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QGridLayout, QLabel, QComboBox, 
                              QPushButton, QProgressBar, QCheckBox, 
@@ -32,8 +34,9 @@ class LogWindow(QDialog):
         self.setLayout(layout)
 
 class RufusClone(QMainWindow):
-    def __init__(self):
+    def __init__(self, usb_devices=None):
         super().__init__()
+        self.usb_devices = usb_devices or {}
         self.setWindowTitle("Rufus 3.20.1929")
         self.setFixedSize(640, 780) 
         
@@ -195,8 +198,13 @@ class RufusClone(QMainWindow):
         lbl_device = QLabel("Device")
         lbl_device.setStyleSheet("font-weight: normal; font-size: 9pt; padding-bottom: 2px;")
         self.combo_device = QComboBox()
-        self.combo_device.addItem("CCCOMA_X64FRE_EN-GB_DV9 (F:) [8 GB]")
-        self.combo_device.addItem("Generic Flash Disk 8.00 GB (E:)")
+        
+        # Populate combo box with detected USB devices
+        if self.usb_devices:
+            for path, label in self.usb_devices.items():
+                self.combo_device.addItem(f"{label} ({path})")
+        else:
+            self.combo_device.addItem("No USB devices found")
         
         device_layout = QVBoxLayout()
         device_layout.setSpacing(2)
@@ -467,6 +475,21 @@ class RufusClone(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion") 
-    window = RufusClone()
+    
+    # Parse USB devices from command line argument
+    usb_devices = {}
+    if len(sys.argv) > 1:
+        try:
+            # Decode the URL-encoded JSON data
+            decoded_data = urllib.parse.unquote(sys.argv[1])
+            usb_devices = json.loads(decoded_data)
+            print("Successfully parsed USB devices:", usb_devices)
+        except Exception as e:
+            print(f"Error parsing USB devices: {e}")
+            usb_devices = {}
+    else:
+        print("No USB devices data received")
+    
+    window = RufusClone(usb_devices)
     window.show()
     sys.exit(app.exec())
