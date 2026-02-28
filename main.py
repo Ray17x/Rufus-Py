@@ -3,7 +3,6 @@ import os
 import subprocess
 import getpass
 import json
-import shlex
 import sys
 import urllib.parse
 
@@ -70,8 +69,8 @@ def CheckFileSignature(file_path) -> bool:
     try:
         with open(file_path, 'rb') as f:
             f.seek(32769) # moves offset to where magic numbers should be
-            magic = f.read(4)
-            if magic == b'\x43\x44\x30\x30':  # "CD00" in hex
+            magic = f.read(5) # read 5 bytes to read CD001
+            if magic == b'\x43\x44\x30\x30\x31':  # "CD001" in hex (applied)
                 print(f"Valid ISO file: {file_path}")
                 return True
             else:
@@ -84,20 +83,57 @@ def CheckFileSignature(file_path) -> bool:
         print(f"Error checking file signature: {err}")
         return False
 
-def FlashUSB(iso_path, usb_path) -> bool:
-    ddcommand = f"dd if={shlex.quote(iso_path)} of={shlex.quote(usb_path)} bs=4M status=progress conv=fdatasync"
-    print(f"Flashing USB with command: {ddcommand}")
+def _is_removable_device(device_node) -> bool:
+    """Check that a device is removable (e.g. USB stick) before writing to it."""
+    # Resolve the base disk from a partition node (e.g. /dev/sdb1 -> sdb)
+    base_name = os.path.basename(device_node).rstrip("0123456789")
+    removable_path = f"/sys/block/{base_name}/removable"
+    try:
+        with open(removable_path, "r") as f:
+            return f.read().strip() == "1"
+    except OSError:
+        return False
+
+
+def _resolve_device_node(usb_mount_path) -> str | None:
+    """Resolve a mount path to its underlying device node for dd."""
+    normalized = os.path.normpath(usb_mount_path)
+    for part in psutil.disk_partitions():
+        if os.path.normpath(part.mountpoint) == normalized:
+            return part.device
+    return None
+
+
+def FlashUSB(iso_path, usb_mount_path) -> bool:
+    # Resolve the device node from the mount path — dd must target the
+    # raw device (e.g. /dev/sdb), not the mounted directory.
+    device_node = _resolve_device_node(usb_mount_path)
+    if not device_node:
+        print(f"Could not resolve device node for mount path: {usb_mount_path}")
+        return False
+
+    # Strip the partition number so dd writes to the whole disk
+    # e.g. /dev/sdb1 -> /dev/sdb
+    raw_device = "/dev/" + os.path.basename(device_node).rstrip("0123456789")
+
+    if not _is_removable_device(raw_device):
+        print(f"Aborting: {raw_device} is not a removable device.")
+        return False
+
+    dd_args = ["dd", f"if={iso_path}", f"of={raw_device}",
+               "bs=4M", "status=progress", "conv=fdatasync"]
+    print(f"Flashing USB with command: {' '.join(dd_args)}")
 
     try:
         if CheckFileSignature(iso_path):
-            subprocess.run(ddcommand, shell=True, check=True)
-            print(f"Successfully flashed {iso_path} to {usb_path}")
+            subprocess.run(dd_args, check=True)
+            print(f"Successfully flashed {iso_path} to {raw_device}")
             return True
         else:
             print(f"Aborting flash: {iso_path} is not a valid ISO file.")
             return False
     except PermissionError:
-        print(f"Permission denied when trying to flash USB: {usb_path}")
+        print(f"Permission denied when trying to flash USB: {raw_device}")
         return False
     except subprocess.CalledProcessError as e:
         print(f"Error during flashing process: {e}")
@@ -123,16 +159,21 @@ def GetUSBInfo(usb_path) -> dict:
             return {}
 
         # Check if USB size is greater than 32GB
-        usb_size = 0
-        total_size = subprocess.check_output(["lsblk", "-d", "-n", "-o", "SIZE", device_node], text=True, timeout=5).strip()
-        size_value = float(total_size[:-1])
-        size_unit = total_size[-1]
-        
-        units = {"K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
-        usb_size = size_value * units.get(size_unit, 1)
+        # Use --bytes for a reliable, parseable integer instead of a
+        # human-readable string whose suffix format can vary.
+        size_output = subprocess.check_output(
+            ["lsblk", "-d", "-n", "-b", "-o", "SIZE", device_node],
+            text=True, timeout=5
+        ).strip()
+
+        if not size_output.isdigit():
+            print(f"Warning: could not parse device size: {size_output!r}")
+            usb_size = 0
+        else:
+            usb_size = int(size_output)
         
         if usb_size > 32 * 1024**3:  # 32GB in bytes
-            print(f"USB device is large, does user want to actually flash this?: {total_size} (passed 32 GB threshold)")
+            print(f"USB device is large, does user want to actually flash this?: {usb_size} bytes (passed 32 GB threshold)")
         
         # Get the label of the USB device
         label = subprocess.check_output(["lsblk", "-d", "-n", "-o", "LABEL", device_node], text=True, timeout=5).strip()

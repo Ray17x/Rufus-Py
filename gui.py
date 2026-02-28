@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QLineEdit, QFrame, QStatusBar, QToolButton, QSpacerItem)
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont
+import os
 
 from main import CheckFileSignature
 
@@ -422,11 +423,10 @@ class Rufus(QMainWindow):
     def browse_file(self):
         file_name, _ = QFileDialog.getOpenFileName(self, "Select Disk Image", "", "ISO Images (*.iso);;All Files (*)")
         if file_name:
-            clean_name = file_name.split("/")[-1].split("\\")[-1]
+            clean_name = os.path.basename(file_name)
             self.combo_boot.setItemText(0, clean_name)
             self.input_label.setText(clean_name.split('.')[0].upper())
             self.log_message(f"Selected image: {file_name}")
-            self.btn_start.setEnabled(CheckFileSignature(file_name))
 
     def show_log(self):
         self.log_window = LogWindow()
